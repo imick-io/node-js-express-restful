@@ -3,11 +3,24 @@ const path = require("path");
 
 const { validationResult } = require("express-validator");
 const Post = require("../models/post");
+const user = require("../models/user");
+
+const PER_PAGE = 2;
 
 exports.getPosts = async (req, res, next) => {
   try {
-    const posts = await Post.find();
-    res.status(200).json({ message: "Fetched posts successfully.", posts });
+    const page = req.query.page || 1;
+    let total = await Post.find().countDocuments();
+
+    const posts = await Post.find()
+      .skip((page - 1) * PER_PAGE)
+      .limit(PER_PAGE);
+
+    res.status(200).json({
+      message: "Fetched posts successfully.",
+      posts,
+      total,
+    });
   } catch (err) {
     if (!err.statusCode) {
       err.statusCode = 500;
@@ -56,9 +69,19 @@ exports.createPost = async (req, res, next) => {
       title,
       content,
       imageUrl,
-      creator: { name: "John Doe" },
+      creator: req.userId,
     });
     await post.save();
+
+    const u = await user.findById(req.userId);
+    u.posts.push(post);
+    await u.save();
+
+    res.status(201).json({
+      message: "Post created successfully!",
+      post,
+      creator: { _id: u._id, name: u.name },
+    });
   } catch (err) {
     if (!err.statusCode) {
       err.statusCode = 500;
@@ -95,6 +118,12 @@ exports.updatePost = async (req, res, next) => {
       error.statusCode = 404;
       throw error;
     }
+    if (post.creator.toString() !== req.userId) {
+      const error = new Error("Not authorized.");
+      error.statusCode = 403;
+      throw error;
+    }
+
     if (imageUrl !== post.imageUrl) {
       clearImage(post.imageUrl);
     }
@@ -121,8 +150,19 @@ exports.deletePost = async (req, res, next) => {
       error.statusCode = 404;
       throw error;
     }
+
+    if (post.creator.toString() !== req.userId) {
+      const error = new Error("Not authorized.");
+      error.statusCode = 403;
+      throw error;
+    }
+
     await Post.findByIdAndRemove(postId);
     clearImage(post.imageUrl);
+    const u = await user.findById(req.userId);
+    u.posts.pull(postId);
+    await u.save();
+
     res.status(200).json({ message: "Deleted post." });
   } catch (err) {
     if (!err.statusCode) {
